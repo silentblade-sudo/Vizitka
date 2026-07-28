@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Крипипаста — Silent Blade</title>
+
+  <!-- Firebase SDK (Realtime Database) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+
   <style>
     /* ===== ГЛОБАЛЬНЫЕ ===== */
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -531,7 +536,7 @@
         <label id="traitorReasonLabel">Причина изгнания <textarea id="fTraitorReason" placeholder="Укажите причину..."></textarea></label>
         <div class="form-actions">
           <button type="button" class="btn-cancel" id="modalCancelBtn">Отмена</button>
-          <button type="submit" class="btn-save">Сохранить</button>
+          <button type="submit" class="btn-save" id="saveBtn">Сохранить</button>
         </div>
       </form>
     </div>
@@ -542,7 +547,25 @@
       'use strict';
 
       // ============================================================
-      // 1. НАЧАЛЬНЫЕ ДАННЫЕ (обновлены статусы)
+      // 0. FIREBASE КОНФИГ И ИНИЦИАЛИЗАЦИЯ
+      // ============================================================
+      const firebaseConfig = {
+        apiKey: "AIzaSyAXmYO6S-OHccLUF26EbbpKBHxXmzA_kkQ",
+        authDomain: "vizitochka-bc61a.firebaseapp.com",
+        databaseURL: "https://vizitochka-bc61a-default-rtdb.europe-west1.firebasedatabase.app",
+        projectId: "vizitochka-bc61a",
+        storageBucket: "vizitochka-bc61a.appspot.com",
+        messagingSenderId: "717735186612",
+        appId: "1:717735186612:web:3af2974bdacc0f1af1c7e1",
+        measurementId: "G-V9JEMGBTMS"
+      };
+
+      firebase.initializeApp(firebaseConfig);
+      const db = firebase.database();
+      const DB_REF = 'members';
+
+      // ============================================================
+      // 1. НАЧАЛЬНЫЕ ДАННЫЕ
       // ============================================================
       const DEFAULT_DATA = [
         {
@@ -623,7 +646,6 @@
           isTraitor: false,
           traitorReason: ''
         },
-        // ----- БЛОНДИ ТЕПЕРЬ ПРЕДАТЕЛЬ -----
         {
           id: '7',
           name: 'Блонди (Маргарет)',
@@ -650,7 +672,6 @@
           isTraitor: false,
           traitorReason: ''
         },
-        // ----- ASHEN ТЕПЕРЬ НЕ ПРЕДАТЕЛЬ -----
         {
           id: '9',
           name: 'Ashen - Ali — Пепельная',
@@ -664,7 +685,6 @@
           isTraitor: false,
           traitorReason: ''
         },
-        // ----- ИСА ТЕПЕРЬ ПРЕДАТЕЛЬ -----
         {
           id: '10',
           name: 'Веда - Иса — Знающая',
@@ -681,35 +701,65 @@
       ];
 
       // ============================================================
-      // 2. РАБОТА С ДАННЫМИ (localStorage)
+      // 2. РАБОТА С ДАННЫМИ (Firebase)
       // ============================================================
-      const STORAGE_KEY = 'creepypasta_members';
-      const ADMIN_KEY = 'creepypasta_admin';
+      let members = [];
 
-      function loadData() {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored) {
-          try { return JSON.parse(stored); }
-          catch(e) { return DEFAULT_DATA; }
+      async function loadData() {
+        try {
+          const snapshot = await db.ref(DB_REF).once('value');
+          const data = snapshot.val();
+          if (data === null || data === undefined) {
+            await saveData(DEFAULT_DATA);
+            return DEFAULT_DATA;
+          }
+          if (Array.isArray(data)) {
+            return data;
+          } else if (typeof data === 'object' && data !== null) {
+            const arr = Object.values(data);
+            if (arr.length && arr.every(item => item && typeof item === 'object' && item.id)) {
+              return arr;
+            }
+            return [];
+          }
+          return [];
+        } catch (error) {
+          console.error('Ошибка загрузки данных:', error);
+          alert('Не удалось загрузить данные. Проверьте подключение к интернету.');
+          return [];
         }
-        return DEFAULT_DATA;
-      }
-      function saveData(data) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       }
 
-      let members = loadData();
+      async function saveData(data) {
+        try {
+          await db.ref(DB_REF).set(data);
+        } catch (error) {
+          console.error('Ошибка сохранения данных:', error);
+          throw error;
+        }
+      }
+
+      async function deleteMember(id) {
+        const index = members.findIndex(m => m.id === id);
+        if (index !== -1) {
+          const updated = [...members];
+          updated.splice(index, 1);
+          await saveData(updated);
+          members = updated;
+        }
+      }
 
       // ============================================================
       // 3. АДМИНИСТРАТОР
       // ============================================================
+      const ADMIN_KEY = 'creepypasta_admin';
       let isAdmin = localStorage.getItem(ADMIN_KEY) === 'true';
 
       function setAdmin(value) {
         isAdmin = value;
         localStorage.setItem(ADMIN_KEY, String(value));
         updateAdminUI();
-        renderCards(); // перерисовываем карточки (показываем/скрываем кнопки)
+        renderCards();
       }
 
       function updateAdminUI() {
@@ -730,7 +780,6 @@
         }
       }
 
-      // Обработчики кнопок администрирования
       document.getElementById('adminLoginBtn').addEventListener('click', function() {
         const pwd = prompt('Введите пароль администратора:');
         if (pwd === 'люблю вас ребята') {
@@ -786,14 +835,13 @@
 
         app.innerHTML = html;
         observeCards();
-        // Сбрасываем флип при перерисовке
         document.querySelectorAll('.card-wrapper.flipped').forEach(el => el.classList.remove('flipped'));
       }
 
       function buildCardsHtml(membersArray) {
         const viewClass = viewMode === 'grid' ? 'grid-view' : 'list-view';
         let html = `<div class="cards-grid ${viewClass}">`;
-        membersArray.forEach((member, index) => {
+        membersArray.forEach(member => {
           const traitorClass = member.isTraitor ? 'traitor' : '';
           const name = member.name || 'Без имени';
           const place = member.place || 'не указано';
@@ -829,7 +877,6 @@
             traitorReasonHtml = `<div class="reason-box"><strong>Причина изгнания:</strong> ${member.traitorReason}</div>`;
           }
 
-          // Кнопки действий только для администратора
           let actionsHtml = '';
           if (isAdmin) {
             actionsHtml = `
@@ -891,11 +938,10 @@
       // ============================================================
       // 8. ОБРАБОТЧИКИ ДЕЙСТВИЙ (только для админа)
       // ============================================================
-      app.addEventListener('click', function(e) {
+      app.addEventListener('click', async function(e) {
         const target = e.target.closest('button');
         if (!target) return;
         if (!isAdmin) {
-          // Если не админ, но пытается нажать кнопки редактирования/удаления – игнорируем (они скрыты, но на всякий случай)
           if (target.classList.contains('btn-edit') || target.classList.contains('btn-delete')) {
             alert('Только администратор может изменять данные.');
             return;
@@ -909,9 +955,12 @@
         if (target.classList.contains('btn-delete')) {
           const id = target.dataset.id;
           if (confirm('Вы уверены, что хотите удалить этого участника?')) {
-            members = members.filter(m => m.id !== id);
-            saveData(members);
-            renderCards();
+            try {
+              await deleteMember(id);
+              renderCards();
+            } catch (error) {
+              alert('Не удалось удалить. Проверьте подключение к интернету.');
+            }
           }
         }
       });
@@ -936,6 +985,7 @@
       const fIsTraitor = document.getElementById('fIsTraitor');
       const fTraitorReason = document.getElementById('fTraitorReason');
       const traitorReasonLabel = document.getElementById('traitorReasonLabel');
+      const saveBtn = document.getElementById('saveBtn');
 
       fIsTraitor.addEventListener('change', function() {
         traitorReasonLabel.style.display = this.checked ? 'flex' : 'none';
@@ -968,10 +1018,14 @@
         }
         traitorReasonLabel.style.display = fIsTraitor.checked ? 'flex' : 'none';
         modalOverlay.classList.add('active');
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Сохранить';
       }
 
       function closeModal() {
         modalOverlay.classList.remove('active');
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Сохранить';
       }
 
       modalCloseBtn.addEventListener('click', closeModal);
@@ -980,18 +1034,20 @@
         if (e.target === modalOverlay) closeModal();
       });
 
-      form.addEventListener('submit', function(e) {
+      form.addEventListener('submit', async function(e) {
         e.preventDefault();
         if (!isAdmin) {
           alert('Доступно только администратору.');
           return;
         }
+
         const name = fName.value.trim();
         const story = fStory.value.trim();
         if (!name || !story) {
           alert('Имя и история обязательны для заполнения!');
           return;
         }
+
         const isTraitor = fIsTraitor.checked;
         const traitorReason = isTraitor ? fTraitorReason.value.trim() : '';
         const memberData = {
@@ -1006,17 +1062,36 @@
           isTraitor: isTraitor,
           traitorReason: traitorReason
         };
+
         const id = editId.value;
-        if (id) {
-          const index = members.findIndex(m => m.id === id);
-          if (index !== -1) members[index] = { ...members[index], ...memberData };
-        } else {
-          memberData.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-          members.push(memberData);
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Сохранение...';
+
+        try {
+          let updatedMembers;
+          if (id) {
+            const index = members.findIndex(m => m.id === id);
+            if (index === -1) {
+              alert('Участник не найден.');
+              saveBtn.disabled = false;
+              saveBtn.textContent = 'Сохранить';
+              return;
+            }
+            updatedMembers = [...members];
+            updatedMembers[index] = { ...members[index], ...memberData };
+          } else {
+            const newId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+            updatedMembers = [...members, { ...memberData, id: newId }];
+          }
+          await saveData(updatedMembers);
+          members = updatedMembers;
+          renderCards();
+          closeModal();
+        } catch (error) {
+          alert('Не удалось сохранить. Проверьте подключение к интернету.');
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Сохранить';
         }
-        saveData(members);
-        renderCards();
-        closeModal();
       });
 
       document.getElementById('openAddBtn').addEventListener('click', function() {
@@ -1058,10 +1133,15 @@
       });
 
       // ============================================================
-      // 11. ПЕРВОНАЧАЛЬНЫЙ РЕНДЕРИНГ И ОБНОВЛЕНИЕ UI
+      // 11. ПЕРВОНАЧАЛЬНЫЙ ЗАПУСК
       // ============================================================
-      updateAdminUI();
-      renderCards();
+      async function init() {
+        members = await loadData();
+        updateAdminUI();
+        renderCards();
+      }
+
+      init();
 
     })();
   </script>
