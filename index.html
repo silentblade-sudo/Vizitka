@@ -4,11 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Крипипаста — Silent Blade</title>
-
-  <!-- Firebase SDK (Realtime Database) -->
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
-
   <style>
     /* ===== ГЛОБАЛЬНЫЕ ===== */
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -458,6 +453,50 @@
     }
     .modal .form-actions .btn-cancel:hover { background: #555; }
 
+    /* ===== ЭКСПОРТ ===== */
+    header { position: relative; z-index: 100; }
+    .export-wrap { position: relative; display: none; }
+    .export-menu {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      min-width: 230px;
+      background: #1a1a1a;
+      border: 1px solid #550000;
+      border-radius: 8px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.7);
+      z-index: 500;
+      overflow: hidden;
+    }
+    .export-wrap.open .export-menu { display: block; }
+    .header-controls .export-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid #2a2a2a;
+      border-radius: 0;
+      padding: 10px 14px;
+    }
+    .header-controls .export-menu button:last-child { border-bottom: none; }
+    .header-controls .export-menu button:hover { background: #3a3a3a; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%);
+      background: #1a1a1a;
+      border: 1px solid #aa2222;
+      color: #ddd;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      z-index: 2000;
+      box-shadow: 0 0 20px rgba(255,0,0,0.25);
+    }
+
     /* ===== FOOTER ===== */
     footer {
       text-align: center;
@@ -505,6 +544,16 @@
         <button id="viewList" class="view-btn active" title="Список">☰</button>
         <button id="viewGrid" class="view-btn" title="Сетка">▦</button>
       </div>
+      <div class="export-wrap" id="exportWrap">
+        <button id="exportBtn" aria-haspopup="true" aria-expanded="false">📤 Экспорт ▾</button>
+        <div class="export-menu" id="exportMenu" role="menu">
+          <button data-export="json" role="menuitem">JSON (.json)</button>
+          <button data-export="md" role="menuitem">Markdown (.md)</button>
+          <button data-export="copy" role="menuitem">Скопировать список</button>
+          <button data-export="import" role="menuitem">Импорт из JSON…</button>
+        </div>
+        <input type="file" id="importFile" accept=".json,application/json" style="display:none;">
+      </div>
       <button id="adminLoginBtn" class="admin-login-btn" style="border-color:#aa2222;color:#ff9999;">🔑 Вход для админа</button>
       <button id="adminLogoutBtn" style="display:none;border-color:#550000;color:#ff6666;">🚪 Выйти</button>
       <span id="adminBadge" class="admin-badge" style="display:none;">Администратор</span>
@@ -536,7 +585,7 @@
         <label id="traitorReasonLabel">Причина изгнания <textarea id="fTraitorReason" placeholder="Укажите причину..."></textarea></label>
         <div class="form-actions">
           <button type="button" class="btn-cancel" id="modalCancelBtn">Отмена</button>
-          <button type="submit" class="btn-save" id="saveBtn">Сохранить</button>
+          <button type="submit" class="btn-save">Сохранить</button>
         </div>
       </form>
     </div>
@@ -547,25 +596,7 @@
       'use strict';
 
       // ============================================================
-      // 0. FIREBASE КОНФИГ И ИНИЦИАЛИЗАЦИЯ
-      // ============================================================
-      const firebaseConfig = {
-        apiKey: "AIzaSyAXmYO6S-OHccLUF26EbbpKBHxXmzA_kkQ",
-        authDomain: "vizitochka-bc61a.firebaseapp.com",
-        databaseURL: "https://vizitochka-bc61a-default-rtdb.europe-west1.firebasedatabase.app",
-        projectId: "vizitochka-bc61a",
-        storageBucket: "vizitochka-bc61a.appspot.com",
-        messagingSenderId: "717735186612",
-        appId: "1:717735186612:web:3af2974bdacc0f1af1c7e1",
-        measurementId: "G-V9JEMGBTMS"
-      };
-
-      firebase.initializeApp(firebaseConfig);
-      const db = firebase.database();
-      const DB_REF = 'members';
-
-      // ============================================================
-      // 1. НАЧАЛЬНЫЕ ДАННЫЕ
+      // 1. НАЧАЛЬНЫЕ ДАННЫЕ (обновлены статусы)
       // ============================================================
       const DEFAULT_DATA = [
         {
@@ -646,6 +677,7 @@
           isTraitor: false,
           traitorReason: ''
         },
+        // ----- БЛОНДИ ТЕПЕРЬ ПРЕДАТЕЛЬ -----
         {
           id: '7',
           name: 'Блонди (Маргарет)',
@@ -672,6 +704,7 @@
           isTraitor: false,
           traitorReason: ''
         },
+        // ----- ASHEN ТЕПЕРЬ НЕ ПРЕДАТЕЛЬ -----
         {
           id: '9',
           name: 'Ashen - Ali — Пепельная',
@@ -685,6 +718,7 @@
           isTraitor: false,
           traitorReason: ''
         },
+        // ----- ИСА ТЕПЕРЬ ПРЕДАТЕЛЬ -----
         {
           id: '10',
           name: 'Веда - Иса — Знающая',
@@ -701,65 +735,35 @@
       ];
 
       // ============================================================
-      // 2. РАБОТА С ДАННЫМИ (Firebase)
+      // 2. РАБОТА С ДАННЫМИ (localStorage)
       // ============================================================
-      let members = [];
+      const STORAGE_KEY = 'creepypasta_members';
+      const ADMIN_KEY = 'creepypasta_admin';
 
-      async function loadData() {
-        try {
-          const snapshot = await db.ref(DB_REF).once('value');
-          const data = snapshot.val();
-          if (data === null || data === undefined) {
-            await saveData(DEFAULT_DATA);
-            return DEFAULT_DATA;
-          }
-          if (Array.isArray(data)) {
-            return data;
-          } else if (typeof data === 'object' && data !== null) {
-            const arr = Object.values(data);
-            if (arr.length && arr.every(item => item && typeof item === 'object' && item.id)) {
-              return arr;
-            }
-            return [];
-          }
-          return [];
-        } catch (error) {
-          console.error('Ошибка загрузки данных:', error);
-          alert('Не удалось загрузить данные. Проверьте подключение к интернету.');
-          return [];
+      function loadData() {
+        const stored = localStorage.getItem(STORAGE_KEY);
+        if (stored) {
+          try { return JSON.parse(stored); }
+          catch(e) { return DEFAULT_DATA; }
         }
+        return DEFAULT_DATA;
+      }
+      function saveData(data) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       }
 
-      async function saveData(data) {
-        try {
-          await db.ref(DB_REF).set(data);
-        } catch (error) {
-          console.error('Ошибка сохранения данных:', error);
-          throw error;
-        }
-      }
-
-      async function deleteMember(id) {
-        const index = members.findIndex(m => m.id === id);
-        if (index !== -1) {
-          const updated = [...members];
-          updated.splice(index, 1);
-          await saveData(updated);
-          members = updated;
-        }
-      }
+      let members = loadData();
 
       // ============================================================
       // 3. АДМИНИСТРАТОР
       // ============================================================
-      const ADMIN_KEY = 'creepypasta_admin';
       let isAdmin = localStorage.getItem(ADMIN_KEY) === 'true';
 
       function setAdmin(value) {
         isAdmin = value;
         localStorage.setItem(ADMIN_KEY, String(value));
         updateAdminUI();
-        renderCards();
+        renderCards(); // перерисовываем карточки (показываем/скрываем кнопки)
       }
 
       function updateAdminUI() {
@@ -767,6 +771,9 @@
         const logoutBtn = document.getElementById('adminLogoutBtn');
         const badge = document.getElementById('adminBadge');
         const addBtn = document.getElementById('openAddBtn');
+        const exportWrap = document.getElementById('exportWrap');
+        exportWrap.style.display = isAdmin ? 'inline-block' : 'none';
+        if (!isAdmin) exportWrap.classList.remove('open');
         if (isAdmin) {
           loginBtn.style.display = 'none';
           logoutBtn.style.display = 'inline-block';
@@ -780,6 +787,7 @@
         }
       }
 
+      // Обработчики кнопок администрирования
       document.getElementById('adminLoginBtn').addEventListener('click', function() {
         const pwd = prompt('Введите пароль администратора:');
         if (pwd === 'люблю вас ребята') {
@@ -835,13 +843,14 @@
 
         app.innerHTML = html;
         observeCards();
+        // Сбрасываем флип при перерисовке
         document.querySelectorAll('.card-wrapper.flipped').forEach(el => el.classList.remove('flipped'));
       }
 
       function buildCardsHtml(membersArray) {
         const viewClass = viewMode === 'grid' ? 'grid-view' : 'list-view';
         let html = `<div class="cards-grid ${viewClass}">`;
-        membersArray.forEach(member => {
+        membersArray.forEach((member, index) => {
           const traitorClass = member.isTraitor ? 'traitor' : '';
           const name = member.name || 'Без имени';
           const place = member.place || 'не указано';
@@ -877,6 +886,7 @@
             traitorReasonHtml = `<div class="reason-box"><strong>Причина изгнания:</strong> ${member.traitorReason}</div>`;
           }
 
+          // Кнопки действий только для администратора
           let actionsHtml = '';
           if (isAdmin) {
             actionsHtml = `
@@ -938,10 +948,11 @@
       // ============================================================
       // 8. ОБРАБОТЧИКИ ДЕЙСТВИЙ (только для админа)
       // ============================================================
-      app.addEventListener('click', async function(e) {
+      app.addEventListener('click', function(e) {
         const target = e.target.closest('button');
         if (!target) return;
         if (!isAdmin) {
+          // Если не админ, но пытается нажать кнопки редактирования/удаления – игнорируем (они скрыты, но на всякий случай)
           if (target.classList.contains('btn-edit') || target.classList.contains('btn-delete')) {
             alert('Только администратор может изменять данные.');
             return;
@@ -955,12 +966,9 @@
         if (target.classList.contains('btn-delete')) {
           const id = target.dataset.id;
           if (confirm('Вы уверены, что хотите удалить этого участника?')) {
-            try {
-              await deleteMember(id);
-              renderCards();
-            } catch (error) {
-              alert('Не удалось удалить. Проверьте подключение к интернету.');
-            }
+            members = members.filter(m => m.id !== id);
+            saveData(members);
+            renderCards();
           }
         }
       });
@@ -985,7 +993,6 @@
       const fIsTraitor = document.getElementById('fIsTraitor');
       const fTraitorReason = document.getElementById('fTraitorReason');
       const traitorReasonLabel = document.getElementById('traitorReasonLabel');
-      const saveBtn = document.getElementById('saveBtn');
 
       fIsTraitor.addEventListener('change', function() {
         traitorReasonLabel.style.display = this.checked ? 'flex' : 'none';
@@ -1018,14 +1025,10 @@
         }
         traitorReasonLabel.style.display = fIsTraitor.checked ? 'flex' : 'none';
         modalOverlay.classList.add('active');
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Сохранить';
       }
 
       function closeModal() {
         modalOverlay.classList.remove('active');
-        saveBtn.disabled = false;
-        saveBtn.textContent = 'Сохранить';
       }
 
       modalCloseBtn.addEventListener('click', closeModal);
@@ -1034,20 +1037,18 @@
         if (e.target === modalOverlay) closeModal();
       });
 
-      form.addEventListener('submit', async function(e) {
+      form.addEventListener('submit', function(e) {
         e.preventDefault();
         if (!isAdmin) {
           alert('Доступно только администратору.');
           return;
         }
-
         const name = fName.value.trim();
         const story = fStory.value.trim();
         if (!name || !story) {
           alert('Имя и история обязательны для заполнения!');
           return;
         }
-
         const isTraitor = fIsTraitor.checked;
         const traitorReason = isTraitor ? fTraitorReason.value.trim() : '';
         const memberData = {
@@ -1062,36 +1063,17 @@
           isTraitor: isTraitor,
           traitorReason: traitorReason
         };
-
         const id = editId.value;
-        saveBtn.disabled = true;
-        saveBtn.textContent = 'Сохранение...';
-
-        try {
-          let updatedMembers;
-          if (id) {
-            const index = members.findIndex(m => m.id === id);
-            if (index === -1) {
-              alert('Участник не найден.');
-              saveBtn.disabled = false;
-              saveBtn.textContent = 'Сохранить';
-              return;
-            }
-            updatedMembers = [...members];
-            updatedMembers[index] = { ...members[index], ...memberData };
-          } else {
-            const newId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-            updatedMembers = [...members, { ...memberData, id: newId }];
-          }
-          await saveData(updatedMembers);
-          members = updatedMembers;
-          renderCards();
-          closeModal();
-        } catch (error) {
-          alert('Не удалось сохранить. Проверьте подключение к интернету.');
-          saveBtn.disabled = false;
-          saveBtn.textContent = 'Сохранить';
+        if (id) {
+          const index = members.findIndex(m => m.id === id);
+          if (index !== -1) members[index] = { ...members[index], ...memberData };
+        } else {
+          memberData.id = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+          members.push(memberData);
         }
+        saveData(members);
+        renderCards();
+        closeModal();
       });
 
       document.getElementById('openAddBtn').addEventListener('click', function() {
@@ -1133,15 +1115,176 @@
       });
 
       // ============================================================
-      // 11. ПЕРВОНАЧАЛЬНЫЙ ЗАПУСК
+      // 10a. ЭКСПОРТ (только для админа)
       // ============================================================
-      async function init() {
-        members = await loadData();
-        updateAdminUI();
-        renderCards();
+      const exportWrap = document.getElementById('exportWrap');
+      const exportBtn = document.getElementById('exportBtn');
+
+      function setExportMenu(open) {
+        exportWrap.classList.toggle('open', open);
+        exportBtn.setAttribute('aria-expanded', String(open));
       }
 
-      init();
+      function showToast(text) {
+        const t = document.createElement('div');
+        t.className = 'toast';
+        t.textContent = text;
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 2800);
+      }
+
+      function exportDate() {
+        return new Date().toISOString().slice(0, 10);
+      }
+
+      function downloadFile(filename, text, mime) {
+        const blob = new Blob([text], { type: mime + ';charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+
+      function mdEscape(text) {
+        return String(text).replace(/([\\\[\]])/g, '\\$1');
+      }
+
+      // Ссылка на участника: Telegram-ник или готовый URL; иначе пусто
+      function memberUrl(m) {
+        const tg = (m.telegram || '').trim();
+        if (/^https?:\/\//i.test(tg)) return tg;
+        const nick = tg.replace(/^@/, '');
+        return /^[A-Za-z0-9_]{3,}$/.test(nick) ? 'https://t.me/' + nick : '';
+      }
+
+      function buildMarkdown() {
+        const line = m => {
+          const name = mdEscape(m.name || 'Без имени');
+          const url = memberUrl(m);
+          return url ? `- [${name}](${url})` : `- ${name}`;
+        };
+        const groups = [
+          { title: 'Состав', list: members.filter(m => !m.isTraitor) },
+          { title: 'Архив Предателей', list: members.filter(m => m.isTraitor) }
+        ];
+        let md = '# Крипипаста — Silent Blade\n';
+        groups.forEach(g => {
+          if (g.list.length === 0) return;
+          md += `\n## ${g.title}\n\n` + g.list.map(line).join('\n') + '\n';
+        });
+        return md;
+      }
+
+      async function copyMarkdown() {
+        const md = buildMarkdown();
+        try {
+          if (!navigator.clipboard || !window.isSecureContext) throw new Error('clipboard unavailable');
+          await navigator.clipboard.writeText(md);
+          showToast('Список скопирован');
+        } catch (err) {
+          downloadFile('creepypasta-' + exportDate() + '.md', md, 'text/markdown');
+          showToast('Буфер недоступен — список скачан файлом .md');
+        }
+      }
+
+      exportBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        setExportMenu(!exportWrap.classList.contains('open'));
+      });
+      document.addEventListener('click', function(e) {
+        if (!exportWrap.contains(e.target)) setExportMenu(false);
+      });
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') setExportMenu(false);
+      });
+      document.getElementById('exportMenu').addEventListener('click', function(e) {
+        const item = e.target.closest('button[data-export]');
+        if (!item) return;
+        setExportMenu(false);
+        if (!isAdmin) {
+          alert('Доступно только администратору.');
+          return;
+        }
+        const kind = item.dataset.export;
+        if (kind === 'json') {
+          downloadFile('creepypasta-' + exportDate() + '.json', JSON.stringify(members, null, 2), 'application/json');
+        } else if (kind === 'md') {
+          downloadFile('creepypasta-' + exportDate() + '.md', buildMarkdown(), 'text/markdown');
+        } else if (kind === 'copy') {
+          copyMarkdown();
+        } else if (kind === 'import') {
+          document.getElementById('importFile').click();
+        }
+      });
+
+      // ----- ИМПОРТ из JSON (слияние по id) -----
+      const IMPORT_FIELDS = ['name', 'place', 'birthDate', 'content', 'accepted', 'telegram', 'phone', 'story', 'traitorReason'];
+
+      function normalizeMember(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+        const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+        if (!name) return null;
+        const m = {};
+        IMPORT_FIELDS.forEach(f => { m[f] = typeof raw[f] === 'string' ? raw[f] : ''; });
+        m.name = name;
+        m.isTraitor = raw.isTraitor === true;
+        if (!m.isTraitor) m.traitorReason = '';
+        const hasId = (typeof raw.id === 'string' || typeof raw.id === 'number') && String(raw.id) !== '';
+        m.id = hasId ? String(raw.id) : Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+        return m;
+      }
+
+      document.getElementById('importFile').addEventListener('change', function() {
+        const file = this.files[0];
+        this.value = '';
+        if (!file) return;
+        if (!isAdmin) {
+          alert('Доступно только администратору.');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onerror = () => alert('Не удалось прочитать файл.');
+        reader.onload = () => {
+          let data;
+          try { data = JSON.parse(reader.result); }
+          catch (e) { alert('Это не JSON-файл или он повреждён.'); return; }
+          if (!Array.isArray(data)) {
+            alert('Ожидается JSON-массив участников — такой, какой делает «Экспорт → JSON».');
+            return;
+          }
+          const items = data.map(normalizeMember).filter(Boolean);
+          if (items.length === 0) {
+            alert('В файле не найдено ни одного участника с именем.');
+            return;
+          }
+          const known = new Set(members.map(m => m.id));
+          const updated = items.filter(m => known.has(m.id)).length;
+          const added = items.length - updated;
+          const skipped = data.length - items.length;
+          const msg = `Импорт: добавить ${added}, обновить ${updated}` +
+            (skipped ? `, пропустить ${skipped} (без имени)` : '') +
+            `.\nУчастники, которых нет в файле, останутся как есть. Продолжить?`;
+          if (!confirm(msg)) return;
+          items.forEach(m => {
+            const i = members.findIndex(x => x.id === m.id);
+            if (i !== -1) members[i] = m; else members.push(m);
+          });
+          saveData(members);
+          renderCards();
+          showToast(`Импортировано: +${added}, обновлено ${updated}`);
+        };
+        reader.readAsText(file);
+      });
+
+      // ============================================================
+      // 11. ПЕРВОНАЧАЛЬНЫЙ РЕНДЕРИНГ И ОБНОВЛЕНИЕ UI
+      // ============================================================
+      updateAdminUI();
+      renderCards();
 
     })();
   </script>
